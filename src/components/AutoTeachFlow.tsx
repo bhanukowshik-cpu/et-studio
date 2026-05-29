@@ -159,6 +159,7 @@ export default function AutoTeachFlow() {
     [preset],
   );
   const [presetMenuOpen, setPresetMenuOpen] = useState(false);
+  const [doneBannerDismissed, setDoneBannerDismissed] = useState(false);
 
   // Saved bite descriptions keyed by `${slotId}:${target}`.
   const [biteDescriptions, setBiteDescriptions] = useState<
@@ -348,6 +349,7 @@ export default function AutoTeachFlow() {
     const total = autoTeachAll ? 6 : totalAssigned;
     setPhase("running");
     setCompleted(0);
+    setDoneBannerDismissed(false);
     let i = 0;
     const tick = () => {
       i += 1;
@@ -448,7 +450,7 @@ export default function AutoTeachFlow() {
       {phase === "running" && (
         <ProgressBanner completed={completed} total={totalToRun} />
       )}
-      {phase === "done" && (
+      {phase === "done" && !doneBannerDismissed && (
         <div className="max-w-[1080px] mx-auto mb-5">
           <div className="bg-brand-50 ring-1 ring-brand/40 rounded-xl px-5 py-3.5 flex items-center gap-3">
             <span className="text-brand-700">
@@ -459,6 +461,14 @@ export default function AutoTeachFlow() {
                 Teaching completed
               </div>
             </div>
+            <button
+              type="button"
+              onClick={() => setDoneBannerDismissed(true)}
+              aria-label="Dismiss"
+              className="text-brand-700 hover:text-brand-600 -mr-1"
+            >
+              <IconClose size={16} />
+            </button>
           </div>
         </div>
       )}
