@@ -6,6 +6,7 @@ type Props = {
   state: BiteTileState;
   size?: "sm" | "md" | "lg";
   onClick?: () => void;
+  onContextMenu?: (e: React.MouseEvent<HTMLButtonElement>) => void;
   draggable?: boolean;
   onDragStart?: (e: React.DragEvent) => void;
   onDragEnd?: (e: React.DragEvent) => void;
@@ -18,6 +19,7 @@ export default function BiteTile({
   state,
   size = "md",
   onClick,
+  onContextMenu,
   draggable = false,
   onDragStart,
   onDragEnd,
@@ -53,6 +55,7 @@ export default function BiteTile({
     <button
       type="button"
       onClick={onClick}
+      onContextMenu={onContextMenu}
       draggable={draggable}
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}

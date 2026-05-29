@@ -188,3 +188,9 @@ export const IconArrowLeft = ({ size = 18, ...p }: IconProps) => (
     <path d="M19 12H5" />
   </svg>
 );
+
+export const IconStar = ({ size = 18, ...p }: IconProps) => (
+  <svg {...base(size)} {...p} fill="currentColor" strokeWidth="0">
+    <path d="M12 2l2.95 6.53 7.05.78-5.3 4.85 1.5 6.97L12 17.77 5.8 21.13l1.5-6.97L2 9.31l7.05-.78L12 2z" />
+  </svg>
+);

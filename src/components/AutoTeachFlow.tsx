@@ -4,6 +4,8 @@ import {
   Fragment,
   useState,
   useCallback,
+  useEffect,
+  useMemo,
   useRef,
   useLayoutEffect,
 } from "react";
@@ -29,14 +31,69 @@ const STYLE_LABELS: Record<StyleId, string> = {
   review: "Review",
 };
 
-const INITIAL_TILE_STATES: Partial<Record<number, BiteTileState>> = {
-  // some bites already finalized to demo the locked state
-  2: "finalized",
-  7: "finalized",
-  // some bites already have teaching available (draft)
-  3: "available",
-  9: "available",
+/* ----- Demo presets ----- */
+
+export type Preset =
+  | "mixed"
+  | "all-finalized"
+  | "all-taught"
+  | "from-scratch";
+
+const PRESET_LABELS: Record<Preset, string> = {
+  "all-finalized": "All Finalized",
+  mixed: "Mixed (Teaching done + Finalized)",
+  "from-scratch": "All from scratch",
+  "all-taught": "All teaching done, not finalized",
 };
+
+const TOTAL_TILES_FOR_PRESET = 22;
+
+function buildPresetStates(
+  preset: Preset,
+): Partial<Record<number, BiteTileState>> {
+  switch (preset) {
+    case "all-finalized": {
+      const out: Partial<Record<number, BiteTileState>> = {};
+      for (let i = 1; i <= TOTAL_TILES_FOR_PRESET; i++) out[i] = "finalized";
+      return out;
+    }
+    case "all-taught": {
+      const out: Partial<Record<number, BiteTileState>> = {};
+      for (let i = 1; i <= TOTAL_TILES_FOR_PRESET; i++) out[i] = "available";
+      return out;
+    }
+    case "from-scratch":
+      return {};
+    case "mixed":
+    default:
+      return {
+        2: "finalized",
+        7: "finalized",
+        3: "available",
+        9: "available",
+      };
+  }
+}
+
+function buildPresetDescriptions(preset: Preset): Record<string, string> {
+  if (preset === "mixed") {
+    return {
+      "default:4":
+        "Recap the previous bite's key idea before introducing the formula.",
+      "default:11":
+        "Use a simple worked example before letting the student practice.",
+      "instruction:6": "Spell out each step of the method.",
+    };
+  }
+  return {};
+}
+
+function buildPresetInstructions(preset: Preset): Record<string, string> {
+  if (preset === "mixed") {
+    return { "default:5": "Speak slowly and pause for student replies." };
+  }
+  return {};
+}
 
 const emptySlots: Slots = {
   default: [],
@@ -76,6 +133,12 @@ export default function AutoTeachFlow() {
   const [showNotTaughtModal, setShowNotTaughtModal] = useState(false);
   const [showInstructionsSheet, setShowInstructionsSheet] = useState(false);
   const [showAllBites, setShowAllBites] = useState(false);
+  // Right-click on a bite tile (with a blue dot) opens a popover with the "View Description" CTA.
+  const [viewDescPopover, setViewDescPopover] = useState<
+    { n: number; top: number; left: number } | null
+  >(null);
+  // When set, renders the inline read-only description viewer below "+ Load More".
+  const [viewingBite, setViewingBite] = useState<number | null>(null);
   const [removePopover, setRemovePopover] = useState<
     | { slot: StyleId; n: number; top: number; left: number }
     | null
@@ -85,21 +148,26 @@ export default function AutoTeachFlow() {
   const [descriptionEditor, setDescriptionEditor] = useState<
     { slot: StyleId; kind: "bite" | "instructions" } | null
   >(null);
-  // Saved bite descriptions keyed by `${slotId}:${target}` — seeded with a couple of
-  // pre-existing descriptions so the blue indicator is visible from launch.
+  // Demo preset — controls the initial tile states, descriptions, and instructions.
+  // `selectedPreset` is what the user explicitly picked (null on first load → no row
+  // highlighted in the catalog). `preset` is what's actually used for rendering and
+  // falls back to "mixed" so the prototype still looks alive on first open.
+  const [selectedPreset, setPresetRaw] = useState<Preset | null>(null);
+  const preset: Preset = selectedPreset ?? "mixed";
+  const INITIAL_TILE_STATES = useMemo(
+    () => buildPresetStates(preset),
+    [preset],
+  );
+  const [presetMenuOpen, setPresetMenuOpen] = useState(false);
+
+  // Saved bite descriptions keyed by `${slotId}:${target}`.
   const [biteDescriptions, setBiteDescriptions] = useState<
     Record<string, string>
-  >({
-    "default:4": "Recap the previous bite's key idea before introducing the formula.",
-    "default:11": "Use a simple worked example before letting the student practice.",
-    "instruction:6": "Spell out each step of the method.",
-  });
+  >(() => buildPresetDescriptions("mixed"));
   // Saved specific instructions keyed by `${slotId}:${target}`
   const [specificInstructions, setSpecificInstructions] = useState<
     Record<string, string>
-  >({
-    "default:5": "Speak slowly and pause for student replies.",
-  });
+  >(() => buildPresetInstructions("mixed"));
 
   // Collapse to ["all"] when *every* current bite in the slot has the same non-empty
   // description, otherwise return the list of bites that actually have descriptions.
@@ -112,9 +180,12 @@ export default function AutoTeachFlow() {
       const withDesc = bitesInSlot.filter(
         (n) => (store[`${slotId}:${n}`] || "").trim().length > 0,
       );
+      // Collapse to ["all"] only when there are *multiple* bites and every one has
+      // the same non-empty description. A single bite with a description shows as
+      // its own number, not "All".
       if (
-        withDesc.length === bitesInSlot.length &&
-        withDesc.length > 0
+        bitesInSlot.length > 1 &&
+        withDesc.length === bitesInSlot.length
       ) {
         const first = store[`${slotId}:${withDesc[0]}`];
         if (withDesc.every((n) => store[`${slotId}:${n}`] === first)) {
@@ -249,6 +320,29 @@ export default function AutoTeachFlow() {
     setError(null);
   };
 
+  /** Switch the demo preset and reset all flow state accordingly. */
+  const setPreset = (next: Preset) => {
+    setPresetRaw(next);
+    setBiteDescriptions(buildPresetDescriptions(next));
+    setSpecificInstructions(buildPresetInstructions(next));
+    setSelected(new Set());
+    setSlots(emptySlots);
+    setAutoTeachAll(false);
+    setAutoTeachEditorOpen(false);
+    setShowAllBites(false);
+    setPhase("idle");
+    setCompleted(0);
+    setError(null);
+    setRemovePopover(null);
+    setDescriptionEditor(null);
+    setCheckIns({
+      default: false,
+      instruction: false,
+      practice: false,
+      review: false,
+    });
+  };
+
   const startAutoTeach = () => {
     if (!ctaEnabled) return;
     const total = autoTeachAll ? 6 : totalAssigned;
@@ -272,6 +366,85 @@ export default function AutoTeachFlow() {
   /* ----- render ----- */
   return (
     <AppShell sidebarDisabled={phase === "running"}>
+      {/* Preset catalog popover — anchored to the bottom-right FAB */}
+      {presetMenuOpen && (
+        <>
+          <button
+            type="button"
+            aria-hidden
+            tabIndex={-1}
+            className="fixed inset-0 z-[55] cursor-default"
+            onClick={() => setPresetMenuOpen(false)}
+          />
+          <div className="fixed right-6 bottom-[90px] z-[60] w-[340px] rounded-2xl bg-white ring-1 ring-ink-line shadow-pop p-4">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-mulish text-[15px] font-bold text-ink">
+                Choose a starting state
+              </h3>
+              <button
+                type="button"
+                onClick={() => setPresetMenuOpen(false)}
+                aria-label="Close"
+                className="text-ink-mute hover:text-ink"
+              >
+                <IconClose size={16} />
+              </button>
+            </div>
+            <div className="space-y-2">
+              {(
+                [
+                  "all-finalized",
+                  "mixed",
+                  "from-scratch",
+                  "all-taught",
+                ] as Preset[]
+              ).map((p) => {
+                const active = selectedPreset === p;
+                return (
+                  <div
+                    key={p}
+                    className={`flex items-center justify-between gap-3 rounded-lg border px-3 py-2.5 ${
+                      active
+                        ? "border-brand bg-brand-50/40"
+                        : "border-ink-line"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 flex-1">
+                      <span
+                        className={`w-2.5 h-2.5 rounded-full shrink-0 ${
+                          active ? "bg-brand" : "bg-ink-line"
+                        }`}
+                      />
+                      <span
+                        className={`text-[12.5px] font-medium ${
+                          active ? "text-brand-700" : "text-ink-soft"
+                        }`}
+                      >
+                        {PRESET_LABELS[p]}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPreset(p);
+                        setPresetMenuOpen(false);
+                        setWidgetOpen(true);
+                      }}
+                      className={`h-[28px] px-3 rounded-md text-[12px] font-semibold transition-colors ${
+                        active
+                          ? "bg-brand text-white hover:bg-brand-600"
+                          : "border border-brand text-brand-700 hover:bg-brand-50"
+                      }`}
+                    >
+                      View
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </>
+      )}
       {phase === "running" && (
         <ProgressBanner completed={completed} total={totalToRun} />
       )}
@@ -300,10 +473,10 @@ export default function AutoTeachFlow() {
         }
       />
 
-      {/* FAB */}
-      {!widgetOpen && (
+      {/* FAB — opens the preset catalog (which then opens the widget) */}
+      {!widgetOpen && !presetMenuOpen && (
         <AutoTeachFab
-          onClick={() => setWidgetOpen(true)}
+          onClick={() => setPresetMenuOpen(true)}
           variant={phase === "running" ? "progress" : "default"}
         />
       )}
@@ -365,6 +538,19 @@ export default function AutoTeachFlow() {
                       size="sm"
                       hasDescription={biteHasAnyDescription(t.number)}
                       onClick={() => toggleTile(t.number)}
+                      onContextMenu={(e) => {
+                        // Only meaningful for bites that already have a description.
+                        if (!biteHasAnyDescription(t.number)) return;
+                        e.preventDefault();
+                        const r = (
+                          e.currentTarget as HTMLElement
+                        ).getBoundingClientRect();
+                        setViewDescPopover({
+                          n: t.number,
+                          top: r.bottom + 6,
+                          left: r.left,
+                        });
+                      }}
                       draggable
                       onDragStart={(e) => {
                         if (isFinalized) {
@@ -408,6 +594,15 @@ export default function AutoTeachFlow() {
                 <div className="mt-2 text-[11px] text-ink-mute">
                   Drag selected tiles into a style card below ↓
                 </div>
+              )}
+              {/* Read-only description viewer for a bite — opens via right-click → "View Description" */}
+              {viewingBite !== null && (
+                <BiteDescriptionsViewer
+                  biteNumber={viewingBite}
+                  biteDescriptions={biteDescriptions}
+                  specificInstructions={specificInstructions}
+                  onClose={() => setViewingBite(null)}
+                />
               )}
               {/* Bite-related errors appear here, right under the Choose Bites grid */}
               {error && error.place === "bites" && (
@@ -502,6 +697,7 @@ export default function AutoTeachFlow() {
                       }}
                       onRemove={(n) => removeFromSlot(id, n)}
                       biteHasAnyDescription={biteHasAnyDescription}
+                      tileStates={INITIAL_TILE_STATES}
                       onRequestRemovePopover={(n, rect) => {
                         const POP_H = 38;
                         const overflowsBottom =
@@ -617,9 +813,11 @@ export default function AutoTeachFlow() {
                             setter((prev) => {
                               const next = { ...prev };
                               if (target === "all") {
-                                // Expand to per-bite for every CURRENT bite in slot
+                                // Only apply to bites that DON'T already have a description —
+                                // never overwrite explicit per-bite descriptions.
                                 slots[slot].forEach((n) => {
-                                  next[`${slot}:${n}`] = text;
+                                  const existing = (prev[`${slot}:${n}`] || "").trim();
+                                  if (!existing) next[`${slot}:${n}`] = text;
                                 });
                               } else {
                                 next[`${slot}:${target}`] = text;
@@ -847,6 +1045,7 @@ export default function AutoTeachFlow() {
                         }}
                         onRemove={(n) => removeFromSlot(id, n)}
                         biteHasAnyDescription={biteHasAnyDescription}
+                        tileStates={INITIAL_TILE_STATES}
                         onRequestRemovePopover={(n, rect) =>
                           setRemovePopover({
                             slot: id,
@@ -953,8 +1152,10 @@ export default function AutoTeachFlow() {
                               setter((prev) => {
                                 const next = { ...prev };
                                 if (target === "all") {
+                                  // Only apply to bites that DON'T already have a description.
                                   slots[slot].forEach((n) => {
-                                    next[`${slot}:${n}`] = text;
+                                    const existing = (prev[`${slot}:${n}`] || "").trim();
+                                    if (!existing) next[`${slot}:${n}`] = text;
                                   });
                                 } else {
                                   next[`${slot}:${target}`] = text;
@@ -1157,6 +1358,42 @@ export default function AutoTeachFlow() {
           </>,
           document.body,
         )}
+      {viewDescPopover &&
+        typeof document !== "undefined" &&
+        createPortal(
+          <>
+            <button
+              type="button"
+              aria-hidden
+              tabIndex={-1}
+              className="fixed inset-0 z-[60] cursor-default"
+              onClick={() => setViewDescPopover(null)}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                setViewDescPopover(null);
+              }}
+            />
+            <div
+              className="fixed z-[70] rounded-lg bg-ink shadow-pop py-1.5 px-0 text-white"
+              style={{
+                top: viewDescPopover.top,
+                left: viewDescPopover.left,
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => {
+                  setViewingBite(viewDescPopover.n);
+                  setViewDescPopover(null);
+                }}
+                className="block w-full text-left px-4 py-1.5 font-mulish text-[13px] font-semibold whitespace-nowrap hover:bg-white/10"
+              >
+                View Description
+              </button>
+            </div>
+          </>,
+          document.body,
+        )}
     </AppShell>
   );
 }
@@ -1179,6 +1416,7 @@ function SlotCard({
   savedDescriptions,
   onOpenSavedDescription,
   biteHasAnyDescription,
+  tileStates,
 }: {
   id: StyleId;
   label: string;
@@ -1200,6 +1438,8 @@ function SlotCard({
   onOpenSavedDescription?: (target: number | "all") => void;
   /** Returns whether bite N has any saved description or instruction across slots. */
   biteHasAnyDescription?: (n: number) => boolean;
+  /** Per-tile initial states map (preset-driven). */
+  tileStates?: Partial<Record<number, BiteTileState>>;
 }) {
   const hasItems = items.length > 0;
   const [menuOpen, setMenuOpen] = useState(false);
@@ -1245,7 +1485,7 @@ function SlotCard({
             </span>
             <div className="flex flex-wrap gap-1 justify-center">
               {items.map((n) => {
-                const initState = INITIAL_TILE_STATES[n];
+                const initState = tileStates?.[n];
                 const stripe =
                   initState === "available" ||
                   initState === "available-selected"
@@ -1438,6 +1678,69 @@ function SavedRow({
   );
 }
 
+function BiteDescriptionsViewer({
+  biteNumber,
+  biteDescriptions,
+  specificInstructions,
+  onClose,
+}: {
+  biteNumber: number;
+  biteDescriptions: Record<string, string>;
+  specificInstructions: Record<string, string>;
+  onClose: () => void;
+}) {
+  type Entry = {
+    slotId: StyleId;
+    kind: "Bite description" | "Specific instruction";
+    text: string;
+  };
+  const entries: Entry[] = [];
+  for (const id of Object.keys(STYLE_LABELS) as StyleId[]) {
+    const bd = (biteDescriptions[`${id}:${biteNumber}`] || "").trim();
+    if (bd) {
+      entries.push({ slotId: id, kind: "Bite description", text: bd });
+    }
+    const si = (specificInstructions[`${id}:${biteNumber}`] || "").trim();
+    if (si) {
+      entries.push({ slotId: id, kind: "Specific instruction", text: si });
+    }
+  }
+
+  return (
+    <div className="mt-3 rounded-xl border border-brand bg-brand-50/30 p-3.5">
+      <div className="flex items-center justify-between mb-3">
+        <div className="font-mulish text-[13px] font-bold text-ink">
+          Saved descriptions for Bite {biteNumber}
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close"
+          className="text-ink-mute hover:text-ink"
+        >
+          <IconClose size={14} />
+        </button>
+      </div>
+      {entries.length === 0 ? (
+        <div className="text-[12px] text-ink-mute italic">
+          No saved descriptions for this bite.
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {entries.map((e, i) => (
+            <div
+              key={i}
+              className="rounded-md bg-white border border-ink-line/70 px-3 py-2 text-[12px] text-ink-soft leading-relaxed whitespace-pre-wrap"
+            >
+              {e.text}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DescriptionPanel({
   slotId,
   slotLabel,
@@ -1470,14 +1773,35 @@ function DescriptionPanel({
     );
   const sharedAllText = allSaved ? perBiteValues[0] : "";
 
-  const savedBiteTargets = allSaved
-    ? []
-    : bites.filter(
-        (n) => (descriptions[`${slotId}:${n}`] || "").trim().length > 0,
-      );
+  // Bites that don't have a description yet — used to decide whether "For all Bites"
+  // appears in the chip row.
+  // Once some bites in the slot are described, the "For all Bites" CTA is hidden
+  // and only the unfilled bites appear in the chip row.
+  const unfilledBites = bites.filter(
+    (n) => !(descriptions[`${slotId}:${n}`] || "").trim(),
+  );
+  const someBitesAlreadyDescribed = unfilledBites.length < bites.length;
 
-  const [target, setTarget] = useState<number | "all">("all");
-  const [text, setText] = useState(sharedAllText);
+  // Default target:
+  //   - if only one bite in the slot, focus that bite (never "all" for a single bite)
+  //   - else if there are unfilled bites, focus the first unfilled one
+  //   - else if every bite shares the same description, keep "all"
+  //   - else focus the first bite in the slot
+  const initialTarget: number | "all" =
+    bites.length === 1
+      ? bites[0]
+      : unfilledBites.length > 0
+        ? unfilledBites[0]
+        : allSaved
+          ? "all"
+          : bites[0] ?? "all";
+
+  const [target, setTarget] = useState<number | "all">(initialTarget);
+  const [text, setText] = useState(
+    initialTarget === "all"
+      ? sharedAllText
+      : descriptions[`${slotId}:${initialTarget}`] || "",
+  );
   const [deletePopover, setDeletePopover] = useState<
     { target: number | "all"; top: number; left: number } | null
   >(null);
@@ -1508,50 +1832,72 @@ function DescriptionPanel({
         {headline}
       </div>
 
-      {/* Bite chip selector + For all Bites — tight, chips and CTA side-by-side */}
+      {/* Single chip row — shows EVERY bite in the slot. A blue dot in the
+          bottom-right of a chip means that bite already has a saved description.
+          Right-click a chip with a saved description to open the red delete popover. */}
       <div className="flex items-center gap-1.5 mb-3">
         <div className="flex items-center gap-1 flex-wrap">
           {bites.map((n) => {
             const isActive = target === n;
-            const blocked = allSaved && target !== n;
+            const hasSaved =
+              (descriptions[`${slotId}:${n}`] || "").trim().length > 0;
             return (
               <button
                 key={n}
                 type="button"
-                onClick={() => {
-                  if (blocked) return;
-                  setTarget(n);
+                onClick={() => setTarget(n)}
+                onContextMenu={(e) => {
+                  if (!hasSaved) return;
+                  e.preventDefault();
+                  const r = (
+                    e.currentTarget as HTMLElement
+                  ).getBoundingClientRect();
+                  setDeletePopover({
+                    target: n,
+                    top: r.bottom + 6,
+                    left: r.left,
+                  });
                 }}
-                disabled={blocked}
                 title={
-                  blocked
-                    ? "Remove the 'All Bites' description first to set a per-bite description"
+                  hasSaved
+                    ? `Bite ${n} has a saved description — right-click to delete`
                     : undefined
                 }
-                className={`w-[34px] h-[26px] rounded-md font-mulish text-[11px] font-bold transition-opacity ${
+                className={`relative w-[34px] h-[26px] rounded-md font-mulish text-[11px] font-bold overflow-visible ${
                   isActive
                     ? "bg-brand text-white"
-                    : blocked
-                      ? "bg-[#F2F2F2] text-ink/40 cursor-not-allowed opacity-60"
-                      : "bg-[#F2F2F2] text-ink hover:brightness-95"
+                    : "bg-[#F2F2F2] text-ink hover:brightness-95"
                 }`}
               >
                 {n}
+                {hasSaved && (
+                  <span
+                    className="absolute bottom-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-[#2E72E8] ring-1 ring-white"
+                    aria-label="has description"
+                  />
+                )}
               </button>
             );
           })}
         </div>
-        <button
-          type="button"
-          onClick={() => setTarget("all")}
-          className={`h-[26px] px-2.5 rounded-md font-mulish text-[11px] font-semibold whitespace-nowrap ${
-            target === "all"
-              ? "bg-brand text-white ring-1 ring-brand"
-              : "bg-white border border-brand/40 text-brand-700"
-          }`}
-        >
-          For all Bites
-        </button>
+        {bites.length > 1 && unfilledBites.length > 1 && (
+          <button
+            type="button"
+            onClick={() => setTarget("all")}
+            title={
+              someBitesAlreadyDescribed
+                ? `Applies to ${unfilledBites.length} bites without a description (${unfilledBites.join(", ")})`
+                : undefined
+            }
+            className={`h-[26px] px-2.5 rounded-md font-mulish text-[11px] font-semibold whitespace-nowrap ${
+              target === "all"
+                ? "bg-brand text-white ring-1 ring-brand"
+                : "bg-white border border-brand/40 text-brand-700"
+            }`}
+          >
+            For all Bites
+          </button>
+        )}
       </div>
 
       {/* Target label + textarea */}
@@ -1565,53 +1911,6 @@ function DescriptionPanel({
         rows={3}
         className="w-full rounded-md bg-[#F2F2F2] border border-ink-line p-3 text-[12px] text-ink resize-none focus:outline-none focus:border-brand"
       />
-
-      {(savedBiteTargets.length > 0 || allSaved) && (
-        <div className="mt-3">
-          <div className="font-mulish text-[10px] text-ink-mute font-semibold mb-1.5">
-            Available descriptions
-          </div>
-          <div className="flex flex-wrap gap-1.5">
-            {allSaved && (
-              <button
-                type="button"
-                onClick={(e) => {
-                  const r = (
-                    e.currentTarget as HTMLElement
-                  ).getBoundingClientRect();
-                  setDeletePopover({
-                    target: "all",
-                    top: r.bottom + 6,
-                    left: r.left,
-                  });
-                }}
-                className="px-2.5 h-[26px] rounded-md text-[11px] font-medium border border-ink-line text-ink-soft bg-white hover:border-brand/50"
-              >
-                All Bites
-              </button>
-            )}
-            {savedBiteTargets.map((n) => (
-              <button
-                key={n}
-                type="button"
-                onClick={(e) => {
-                  const r = (
-                    e.currentTarget as HTMLElement
-                  ).getBoundingClientRect();
-                  setDeletePopover({
-                    target: n,
-                    top: r.bottom + 6,
-                    left: r.left,
-                  });
-                }}
-                className="px-2.5 h-[26px] rounded-md text-[11px] font-medium border border-ink-line text-ink-soft bg-white hover:border-brand/50"
-              >
-                Bite {n}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
 
       {/* Red delete popover — rendered via portal so it escapes the editor's overflow */}
       {deletePopover &&
